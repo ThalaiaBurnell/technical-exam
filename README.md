@@ -176,11 +176,72 @@ The initial end-to-end run processed 10 article tasks.
 
 The failures demonstrate that scraping errors are handled without stopping the entire pipeline.
 
-## LLM Integration
 
-LLM integration is an optional extension and is not currently implemented.
+## AI Enrichment (GroqCloud)
 
-A future extension could use the Gemini API to summarize accepted articles or extract technical keywords.
+The Consumer integrates with GroqCloud using the
+`openai/gpt-oss-20b` model.
+
+For articles that pass content integrity validation,
+the system generates three insights in a single API request:
+
+- **Summarization:** A factual, two-sentence English summary.
+- **Sentiment Analysis:** Positive, Negative, or Neutral.
+- **Keyword Extraction:** Five relevant technical or topical keywords.
+
+AI results are stored in MongoDB under the `ai` field.
+
+### Configuration
+
+Create a local `.env` file using the provided template:
+
+```bash
+cp .env.example .env
+```
+
+Configure these environment variables:
+
+```dotenv
+GROQ_API_KEY=your_actual_groq_api_key
+AI_PROVIDER=groq
+AI_MODEL=openai/gpt-oss-20b
+```
+
+Never commit the actual API key to GitHub.
+
+To run without an API key, use:
+
+```dotenv
+AI_PROVIDER=mock
+```
+
+Mock mode returns simulated results and does not contact GroqCloud.
+
+### AI Caching
+
+The system uses SHA-256 content fingerprints to detect
+whether an article's content has changed.
+
+When a previously processed article has the same fingerprint,
+AI provider, and model, the Consumer reuses its existing
+AI results instead of making another API request.
+
+This reduces API usage and avoids unnecessary processing.
+
+### Error Handling
+
+AI enrichment is optional and isolated from article scraping.
+
+If GroqCloud is unavailable or returns an error,
+the article can still be stored successfully.
+
+The system records the AI error separately without
+discarding the scraped article or integrity results.
+
+If a previously successful article encounters a temporary
+scraping failure during reprocessing, its existing successful
+MongoDB record is preserved.
+```
 
 ## Design Choices
 

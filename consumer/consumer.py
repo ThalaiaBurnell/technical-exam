@@ -12,6 +12,7 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 from integrity import validate_content
+from ai_enrichment import enrich_article
 
 
 # Configure application logging.
@@ -138,7 +139,7 @@ def scrape_article(url):
 
 
 def process_article(task, collection):
-    """Scrape, validate, and store an article."""
+    """Scrape, validate, enrich, and store an article."""
 
     article_id = task["id"]
 
@@ -202,7 +203,8 @@ def process_article(task, collection):
             "body": body,
             "status": "success",
             "error": None,
-            "integrity": integrity
+            "integrity": integrity,
+            "ai": None
         })
 
         logger.info(
@@ -211,14 +213,101 @@ def process_article(task, collection):
             integrity["quality_status"]
         )
 
+        # Step 5: Generate AI insights for accepted articles.
+        if (
+            integrity["quality_status"] == "accepted"
+            and not integrity["duplicate_of"]
+        ):
+            try:
+                # Check whether this article already has AI results.
+                previous = collection.find_one(
+                    {"id": article_id},
+                    {"integrity": 1, "ai": 1}
+                )
+
+                previous_ai = (
+                    previous.get("ai") if previous else None
+                )
+
+                previous_integrity = (
+                    previous.get("integrity") or {}
+                    if previous else {}
+                )
+
+                previous_fingerprint = (
+                    previous_integrity.get("content_fingerprint")
+                )
+
+                provider = os.getenv("AI_PROVIDER", "mock")
+
+                model = (
+                    os.getenv("AI_MODEL", "openai/gpt-oss-20b")
+                    if provider == "groq"
+                    else "mock"
+                )
+
+                # Reuse existing AI results if content is unchanged.
+                if (
+                    previous_fingerprint == fingerprint
+                    and isinstance(previous_ai, dict)
+                    and previous_ai.get("provider") == provider
+                    and previous_ai.get("model") == model
+                    and previous_ai.get("status") in ("success", "mock")
+                ):
+                    result["ai"] = previous_ai
+
+                    logger.info(
+                        "Reused AI results for article %s",
+                        article_id
+                    )
+
+                else:
+                    result["ai"] = enrich_article(title, body)
+
+                    logger.info(
+                        "AI enrichment completed for article %s",
+                        article_id
+                    )
+
+            except Exception as error:
+                # AI errors must not discard scraped articles.
+                result["ai"] = {
+                    "status": "failed",
+                    "error": str(error)
+                }
+
+                logger.warning(
+                    "AI enrichment failed for %s: %s",
+                    article_id,
+                    error
+                )
+
     except (requests.RequestException, ValueError) as error:
-        # Record failed scrapes without crashing the worker.
+        # Check whether this article was saved successfully before.
+        previous = collection.find_one(
+            {"id": article_id},
+            {"status": 1}
+        )
+
+        if previous and previous.get("status") == "success":
+            # Keep existing content, integrity, and AI results.
+            logger.warning(
+                "Could not re-scrape article %s: %s. "
+                "Preserving previously successful record.",
+                article_id,
+                error
+            )
+
+            return
+
+        # First-time failures are still recorded in MongoDB.
         result.update({
             "title": None,
             "body": None,
             "status": "failed",
             "error": str(error),
-            "integrity": None
+            "integrity": None,
+            "ai": None
         })
 
         logger.warning(
@@ -227,13 +316,13 @@ def process_article(task, collection):
             error
         )
 
-    # Step 5: Measure processing duration.
+    # Step 6: Measure processing duration.
     result["processing_seconds"] = round(
         time.monotonic() - started,
         3
     )
 
-    # Step 6: Save the article without creating duplicate IDs.
+    # Step 7: Save without creating duplicate article IDs.
     collection.update_one(
         {"id": article_id},
         {"$set": result},
