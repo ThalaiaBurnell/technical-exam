@@ -50,7 +50,7 @@ Python, Redis, and MongoDB do not need separate host installations.
 Clone the repository:
 
 ```bash
-git clone <https://github.com/ThalaiaBurnell/technical-exam.git>
+git clone https://github.com/ThalaiaBurnell/technical-exam.git
 cd technical-exam
 ```
 
